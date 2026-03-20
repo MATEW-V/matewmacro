@@ -9,14 +9,30 @@ import keyboard
 import threading
 from datetime import datetime
 import sys
+import shutil
+import tkinter.messagebox as mb
 
 # ============ CONFIGURATION ============
+# Get correct path for both script and compiled exe
 if getattr(sys, 'frozen', False):
-    BASE_PATH = os.path.dirname(sys.executable)
+    # Running as compiled .exe - files are extracted to _MEIPASS
+    INTERNAL_PATH = sys._MEIPASS
+    EXTERNAL_PATH = os.path.dirname(sys.executable)
 else:
-    BASE_PATH = os.path.dirname(os.path.abspath(__file__))
+    # Running as script
+    INTERNAL_PATH = os.path.dirname(os.path.abspath(__file__))
+    EXTERNAL_PATH = INTERNAL_PATH
 
-TEMPLATE_FOLDER = os.path.join(BASE_PATH, "letter_templates")
+# Internal paths (files inside the exe)
+TEMPLATE_FOLDER = os.path.join(INTERNAL_PATH, "letter_templates")
+AHK_SCRIPT_SOURCE = os.path.join(INTERNAL_PATH, "macros.ahk")
+
+# External paths (files created/used in user's folder)
+STATE_FILE = os.path.join(EXTERNAL_PATH, "state.txt")
+PID_FILE = os.path.join(EXTERNAL_PATH, "python_pid.txt")
+EXIT_SIGNAL = os.path.join(EXTERNAL_PATH, "exit_signal.txt")
+AHK_SCRIPT_DEST = os.path.join(EXTERNAL_PATH, "macros.ahk")
+
 SLOT1_LOCATION = {'left': 860, 'top': 200, 'width': 50, 'height': 100}
 
 MACROS = [
@@ -28,18 +44,21 @@ MACROS = [
      "delay": 100, "delay_min": 100, "delay_max": 200},
 ]
 
+# Check if templates exist (inside exe)
 if not os.path.exists(TEMPLATE_FOLDER):
     print(f"❌ ERROR: Templates folder not found: {TEMPLATE_FOLDER}")
-    input("Press Enter to exit...")
+    mb.showerror("Error", f"Templates folder not found!\n\n{TEMPLATE_FOLDER}")
     sys.exit(1)
 
 print("=" * 50)
-print(f"Base Path: {BASE_PATH}")
+print(f"Internal Path: {INTERNAL_PATH}")
+print(f"External Path: {EXTERNAL_PATH}")
+print(f"Templates: {TEMPLATE_FOLDER}")
 print("=" * 50)
 
 class LetterMacro:
     def __init__(self, parent, status_callback=None):
-        self.enabled = False  # Single state variable
+        self.enabled = False
         self.region = SLOT1_LOCATION
         self.templates = []
         self.debug = True
@@ -145,7 +164,7 @@ class LetterMacro:
 
 class MATEWmacro:
     def __init__(self):
-        self.state_file = os.path.join(BASE_PATH, "state.txt")
+        self.state_file = STATE_FILE
         self.game_active = False
         self.macro_configs = MACROS
         
@@ -153,9 +172,10 @@ class MATEWmacro:
         if not os.path.exists(self.state_file):
             with open(self.state_file, 'w') as f:
                 f.write(",".join(["0"] * len(self.macro_configs)))
+            print(f"✅ Created state file: {self.state_file}")
         
         # Write Python PID for AHK to monitor
-        self.pid_file = os.path.join(BASE_PATH, "python_pid.txt")
+        self.pid_file = PID_FILE
         try:
             with open(self.pid_file, 'w') as f:
                 f.write(str(os.getpid()))
@@ -163,11 +183,23 @@ class MATEWmacro:
         except Exception as e:
             print(f"⚠️ Could not write PID file: {e}")
         
-        # Launch AHK script
-        ahk_script = os.path.join(BASE_PATH, "macros.ahk")
-        if os.path.exists(ahk_script):
-            subprocess.Popen([ahk_script], shell=True)
-            print("✅ AHK script launched")
+        # Copy AHK script from internal to external if needed
+        if os.path.exists(AHK_SCRIPT_SOURCE):
+            if not os.path.exists(AHK_SCRIPT_DEST):
+                try:
+                    shutil.copy2(AHK_SCRIPT_SOURCE, AHK_SCRIPT_DEST)
+                    print(f"✅ AHK script copied to: {AHK_SCRIPT_DEST}")
+                except Exception as e:
+                    print(f"⚠️ Could not copy AHK script: {e}")
+            
+            # Launch AHK script from external location
+            if os.path.exists(AHK_SCRIPT_DEST):
+                subprocess.Popen([AHK_SCRIPT_DEST], shell=True)
+                print(f"✅ AHK script launched from: {AHK_SCRIPT_DEST}")
+            else:
+                print(f"⚠️ AHK script not found at: {AHK_SCRIPT_DEST}")
+        else:
+            print(f"⚠️ Internal AHK script not found: {AHK_SCRIPT_SOURCE}")
         
         # Initialize Python macros
         self.python_macros = [None] * len(self.macro_configs)
@@ -309,19 +341,20 @@ class MATEWmacro:
         print("🛑 Closing application...")
         
         # Create exit signal file for AHK
-        exit_signal = os.path.join(BASE_PATH, "exit_signal.txt")
         try:
-            with open(exit_signal, 'w') as f:
+            with open(EXIT_SIGNAL, 'w') as f:
                 f.write("exit")
-        except:
-            pass
+            print(f"✅ Exit signal sent: {EXIT_SIGNAL}")
+        except Exception as e:
+            print(f"⚠️ Could not create exit signal: {e}")
         
         # Clean up PID file
         try:
             if os.path.exists(self.pid_file):
                 os.remove(self.pid_file)
-        except:
-            pass
+                print(f"✅ PID file cleaned up: {self.pid_file}")
+        except Exception as e:
+            print(f"⚠️ Could not remove PID file: {e}")
         
         time.sleep(0.3)
         
