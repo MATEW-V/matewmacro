@@ -16,6 +16,7 @@ CheckStates() {
     global q := states[1] = "1"
     global x1 := states[2] = "1"
     global x2 := states[3] = "1"
+    global cf := states[4] = "1"
 }
 
 ; Individual toggles control hotkeys
@@ -25,7 +26,11 @@ q::{
     Sleep 60
     SendInput "{RButton}"
 }
-
+#HotIf WinActive("ahk_exe RobloxPlayerBeta.exe") && cf
+^f::{
+    SendInput "{f}"
+    SendInput "{q}"   
+}
 #HotIf WinActive("ahk_exe RobloxPlayerBeta.exe") && x1
 XButton1::SendInput "{9}"
 

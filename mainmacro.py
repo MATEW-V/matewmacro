@@ -20,6 +20,7 @@ MACROS = [
     {"name": "Dodge Cancel", "hotkey": "Q", "desc": "Q → delay → right click", "type": "ahk"},
     {"name": "b mbutton -> 9", "hotkey": "XButton1", "desc": "Mouse back → 9", "type": "ahk"},
     {"name": "f mbutton -> 8", "hotkey": "XButton2", "desc": "Mouse forward → 8", "type": "ahk"},
+    {"name": "Roll Parry", "hotkey": "CTRL+F", "desc": "hold ctrl and m1 after for insta uppercut", "type": "ahk"},
     {"name": "Ritual Cast", "hotkey": "", "desc": "automatic ritual caster", "type": "python", 
      "delay": 100, "delay_min": 100, "delay_max": 200},
 ]
@@ -247,7 +248,7 @@ class MATEWmacro:
         self.root.title("MATEW MACRO")
         
         window_height = 100 + len(self.macro_configs) * 35
-        self.root.geometry(f"550x{window_height}")
+        self.root.geometry(f"500x{window_height}")
         
         main = tk.Frame(self.root, padx=20, pady=20)
         main.pack()
@@ -288,7 +289,7 @@ class MATEWmacro:
                 
                 tk.Scale(slider_frame, from_=config["delay_min"], to=config["delay_max"], 
                         orient="horizontal", variable=delay_var, length=150,
-                        command=lambda val, idx=i: self.python_macros[idx].set_delay(val),
+                        command=lambda val, idx=i: self.python_macros[idx].set_delay(int(val)),
                         showvalue=False).pack(side=tk.LEFT, padx=5)
                 
                 label = tk.Label(slider_frame, text=f"{delay_var.get()}ms", width=5, font=("Arial", 8))
