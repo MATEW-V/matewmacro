@@ -11,24 +11,25 @@ from threading import Thread
 from datetime import datetime
 import sys
 
-# ============ LETTER MACRO CONFIG ============
+# ============ CONFIGURATION ============
 TEMPLATE_FOLDER = r"c:\Users\Matthew V\Desktop\MATEWMACRO\letter_templates"
 SLOT1_LOCATION = {'left': 860, 'top': 200, 'width': 50, 'height': 100}
 
-# Verify folder exists
-print("=" * 50)
-print("PATH DEBUG INFORMATION")
-print("=" * 50)
-print(f"Templates folder: {TEMPLATE_FOLDER}")
-print(f"Folder exists? {os.path.exists(TEMPLATE_FOLDER)}")
+# ============ MACRO DEFINITIONS ============
+MACROS = [
+    {"name": "Dodge Cancel", "hotkey": "Q", "desc": "Q → delay → right click", "type": "ahk"},
+    {"name": "b mbutton -> 9", "hotkey": "XButton1", "desc": "Mouse back → 9", "type": "ahk"},
+    {"name": "f mbutton -> 8", "hotkey": "XButton2", "desc": "Mouse forward → 8", "type": "ahk"},
+    {"name": "Ritual Cast", "hotkey": "", "desc": "automatic ritual caster", "type": "python", 
+     "delay": 100, "delay_min": 100, "delay_max": 200},
+]
 
-if os.path.exists(TEMPLATE_FOLDER):
-    print(f"Files found: {os.listdir(TEMPLATE_FOLDER)}")
-else:
-    print(f"❌ ERROR: Templates folder not found!")
-    print(f"Please check the path: {TEMPLATE_FOLDER}")
+# ============ INITIALIZATION ============
+if not os.path.exists(TEMPLATE_FOLDER):
+    print(f"❌ ERROR: Templates folder not found: {TEMPLATE_FOLDER}")
     input("Press Enter to exit...")
     sys.exit(1)
+
 print("=" * 50)
 
 class LetterMacro:
@@ -58,31 +59,24 @@ class LetterMacro:
     def load_templates(self):
         self.log("Loading templates...")
         self.templates = []
-        loaded = 0
         
         for f in os.listdir(TEMPLATE_FOLDER):
             if not f.lower().endswith('.png'):
                 continue
                 
             letter = f[1].upper() if f.startswith('p') else f[0].upper()
-            path = os.path.join(TEMPLATE_FOLDER, f)
-            img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+            img = cv2.imread(os.path.join(TEMPLATE_FOLDER, f), cv2.IMREAD_GRAYSCALE)
             
             if img is not None:
                 self.templates.append((letter, img))
-                loaded += 1
                 self.log(f"Loaded: {f} -> {letter}")
                 
-        self.log(f"Loaded {loaded} templates")
-        return loaded > 0
+        self.log(f"Loaded {len(self.templates)} templates")
+        return len(self.templates) > 0
         
     def detect_in_region(self, img):
         try:
-            if img.shape[2] == 4:
-                gray = cv2.cvtColor(img[:, :, :3], cv2.COLOR_BGR2GRAY)
-            else:
-                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-                
+            gray = cv2.cvtColor(img[:, :, :3], cv2.COLOR_BGR2GRAY) if img.shape[2] == 4 else cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
             if np.mean(gray) < self.MIN_BRIGHTNESS:
                 return None, 0
                 
@@ -91,8 +85,7 @@ class LetterMacro:
             for letter, template in self.templates:
                 if template.shape[0] > gray.shape[0] or template.shape[1] > gray.shape[1]:
                     continue
-                result = cv2.matchTemplate(gray, template, cv2.TM_CCOEFF_NORMED)
-                _, score, _, _ = cv2.minMaxLoc(result)
+                score = cv2.minMaxLoc(cv2.matchTemplate(gray, template, cv2.TM_CCOEFF_NORMED))[1]
                 if score > 0.98:
                     return letter, score
                 if score > best_score:
@@ -107,36 +100,32 @@ class LetterMacro:
         self.log("Letter macro running")
         type_count = 0
         
-        try:
-            with mss.mss() as sct:
-                while self.enabled:
-                    try:
-                        if self.parent and self.parent.game_active:
-                            img = np.array(sct.grab(self.region))
-                            letter, score = self.detect_in_region(img)
-                            
-                            if letter:
-                                self.log(f"Typing '{letter}'")
-                                keyboard.press_and_release(letter.lower())
-                                type_count += 1
-                                time.sleep(self.KEY_DELAY)
-                        else:
-                            time.sleep(0.5)
+        with mss.mss() as sct:
+            while self.enabled:
+                try:
+                    if self.parent and self.parent.game_active:
+                        img = np.array(sct.grab(self.region))
+                        letter, _ = self.detect_in_region(img)
                         
-                        time.sleep(self.FAST_POLL)
-                    except Exception as e:
-                        self.log(f"Loop error: {e}")
-                        time.sleep(1)
-        except Exception as e:
-            self.log(f"Macro error: {e}")
+                        if letter:
+                            self.log(f"Typing '{letter}'")
+                            keyboard.press_and_release(letter.lower())
+                            type_count += 1
+                            time.sleep(self.KEY_DELAY)
+                    else:
+                        time.sleep(0.5)
+                    
+                    time.sleep(self.FAST_POLL)
+                except Exception as e:
+                    self.log(f"Loop error: {e}")
+                    time.sleep(1)
                     
         self.log(f"Stopped - typed {type_count} letters")
         self.running = False
         
     def start(self):
-        if not self.running and not self.enabled:
-            self.enabled = True
-            self.running = True
+        if not self.running:
+            self.enabled = self.running = True
             self.thread = threading.Thread(target=self.macro_loop, daemon=True)
             self.thread.start()
             self.log("Started")
@@ -144,8 +133,7 @@ class LetterMacro:
         return False
         
     def stop(self):
-        self.enabled = False
-        self.running = False
+        self.enabled = self.running = False
         if self.thread and self.thread.is_alive():
             self.thread.join(timeout=1.0)
         self.log("Stopped")
@@ -158,34 +146,39 @@ class MATEWmacro:
     def __init__(self):
         self.state_file = os.path.join(os.path.dirname(__file__), "state.txt")
         self.game_active = False
-        self.letter_macro = None
-        self.letter_macro_enabled = False
+        self.macro_configs = MACROS
         
+        # Initialize state file
         with open(self.state_file, 'w') as f:
-            f.write("0,0,0,0")
+            f.write(",".join(["0"] * len(self.macro_configs)))
         
+        # Launch AHK script
         ahk_script = os.path.join(os.path.dirname(__file__), "macros.ahk")
         if os.path.exists(ahk_script):
             subprocess.Popen([ahk_script], shell=True)
         
-        self.macros = [
-            {"name": "Dodge Cancel", "hotkey": "q", "desc": "Q → delay → right click"},
-            {"name": "Macro 2", "hotkey": "XButton1", "desc": "Mouse back → 9"},
-            {"name": "Macro 3", "hotkey": "XButton2", "desc": "Mouse forward → 8"},
-            {"name": "Letter Macro", "hotkey": "", "desc": "Types letters"},
-        ]
-        
-        self.buttons = []
-        self.letter_status = ""
+        # Initialize Python macros
+        self.python_macros = []
+        self.python_macro_states = []
+        self.init_python_macros()
         
         self.setup_gui()
         Thread(target=self.monitor_roblox, daemon=True).start()
-        self.letter_macro = LetterMacro(self, self.update_letter_status)
-        print("✅ Letter macro initialized")
+        print(f"✅ Initialized {len(self.macro_configs)} macros")
         
-    def update_letter_status(self, message):
-        if "Typing" in message:
-            self.letter_status = message
+    def init_python_macros(self):
+        for i, config in enumerate(self.macro_configs):
+            if config.get("type") == "python":
+                macro = LetterMacro(self, lambda msg, idx=i: self.update_macro_status(idx, msg))
+                self.python_macros.append(macro)
+                self.python_macro_states.append(False)
+            else:
+                self.python_macros.append(None)
+                self.python_macro_states.append(False)
+    
+    def update_macro_status(self, index, message):
+        if "Typing" in message and hasattr(self, 'macro_statuses'):
+            self.macro_statuses[index] = message
             self.root.after(0, self.update_buttons)
     
     def monitor_roblox(self):
@@ -204,12 +197,9 @@ class MATEWmacro:
     def read_states(self):
         try:
             with open(self.state_file, 'r') as f:
-                content = f.read().strip()
-                if content:
-                    return [x == "1" for x in content.split(",")]
-                return [False, False, False, False]
+                return [x == "1" for x in f.read().strip().split(",")]
         except:
-            return [False, False, False, False]
+            return [False] * len(self.macro_configs)
     
     def write_states(self, states):
         with open(self.state_file, 'w') as f:
@@ -220,54 +210,34 @@ class MATEWmacro:
         states[index] = not states[index]
         self.write_states(states)
         
-        if index == 3:
-            if states[3]:
-                if not self.letter_macro_enabled and self.letter_macro:
-                    if self.letter_macro.start():
-                        self.letter_macro_enabled = True
-            else:
-                if self.letter_macro_enabled and self.letter_macro:
-                    self.letter_macro.stop()
-                    self.letter_macro_enabled = False
+        if self.python_macros[index]:
+            if states[index] and not self.python_macro_states[index]:
+                if self.python_macros[index].start():
+                    self.python_macro_states[index] = True
+            elif not states[index] and self.python_macro_states[index]:
+                self.python_macros[index].stop()
+                self.python_macro_states[index] = False
         
         self.update_buttons()
     
-    def update_letter_delay(self, val=None):
-        if self.letter_macro:
-            ms = self.letter_delay_var.get()
-            self.letter_macro.set_delay(ms)
-            self.letter_delay_label.config(text=f"{ms}ms")
-    
     def update_buttons(self):
-        try:
-            states = self.read_states()
+        states = self.read_states()
+        
+        for i, btn in enumerate(self.buttons):
+            config = self.macro_configs[i]
+            is_on = states[i]
             
-            for i, btn in enumerate(self.buttons):
-                if i < 3:
-                    btn.config(
-                        text=f"{self.macros[i]['name']}: {'ON' if states[i] else 'OFF'}",
-                        bg="green" if states[i] else "lightgray",
-                        fg="white" if states[i] else "black"
-                    )
-                else:
-                    if states[i] and self.letter_status:
-                        display_text = f"Letter: {self.letter_status[-20:]}"
-                    else:
-                        display_text = f"{self.macros[i]['name']}: {'ON' if states[i] else 'OFF'}"
-                    
-                    btn.config(
-                        text=display_text,
-                        bg="green" if states[i] else "lightgray",
-                        fg="white" if states[i] else "black"
-                    )
+            if config.get("type") == "python" and is_on and i in self.macro_statuses:
+                text = f"{config['name']}: {self.macro_statuses[i][-20:]}"
+            else:
+                text = f"{config['name']}: {'ON' if is_on else 'OFF'}"
             
-            self.status_label.config(
-                text=f"Roblox: {'ACTIVE' if self.game_active else 'INACTIVE'}",
-                fg="green" if self.game_active else "red"
-            )
-            
-        except Exception as e:
-            print(f"Update error: {e}")
+            btn.config(text=text, bg="green" if is_on else "lightgray", fg="white" if is_on else "black")
+        
+        self.status_label.config(
+            text=f"Roblox: {'ACTIVE' if self.game_active else 'INACTIVE'}",
+            fg="green" if self.game_active else "red"
+        )
         
         self.root.after(500, self.update_buttons)
     
@@ -275,56 +245,70 @@ class MATEWmacro:
         self.root = tk.Tk()
         self.root.attributes('-topmost', True)
         self.root.title("MATEW MACRO")
-        self.root.geometry("500x250")
+        
+        window_height = 100 + len(self.macro_configs) * 35
+        self.root.geometry(f"550x{window_height}")
         
         main = tk.Frame(self.root, padx=20, pady=20)
         main.pack()
         
-        self.status_label = tk.Label(main, text="Roblox: INACTIVE", 
-                                    font=("Arial", 10, "bold"), fg="red")
+        self.status_label = tk.Label(main, text="Roblox: INACTIVE", font=("Arial", 10, "bold"), fg="red")
         self.status_label.pack(pady=(0, 10))
         
-        for i, m in enumerate(self.macros):
+        self.buttons = []
+        self.macro_statuses = {}
+        self.macro_delay_vars = []
+        self.macro_delay_labels = []
+        
+        for i, config in enumerate(self.macro_configs):
             frame = tk.Frame(main)
             frame.pack(fill=tk.X, pady=3)
             
-            hotkey_text = f"[{m['hotkey']}]" if m['hotkey'] else "    "
-            tk.Label(frame, text=hotkey_text, width=8, 
-                    fg="blue", font=("Arial", 9, "bold")).pack(side=tk.LEFT)
+            # Hotkey display
+            hotkey = f"[{config['hotkey']}]" if config['hotkey'] else "    "
+            tk.Label(frame, text=hotkey, width=8, fg="blue", font=("Arial", 9, "bold")).pack(side=tk.LEFT)
             
-            btn = tk.Button(frame, text=f"{m['name']}: OFF",
-                          command=lambda idx=i: self.toggle_macro(idx),
-                          width=18, bg="lightgray")
+            # Toggle button
+            btn = tk.Button(frame, text=f"{config['name']}: OFF", command=lambda idx=i: self.toggle_macro(idx), width=18, bg="lightgray")
             btn.pack(side=tk.LEFT, padx=5)
             self.buttons.append(btn)
             
-            if i == 3:
+            # Description
+            tk.Label(frame, text=config["desc"], fg="gray", font=("Arial", 8)).pack(side=tk.LEFT)
+            
+            # Slider for Python macros with delay
+            if config.get("type") == "python" and "delay" in config:
                 slider_frame = tk.Frame(main)
                 slider_frame.pack(fill=tk.X, pady=(0, 10), padx=(40, 0))
                 
-                tk.Label(slider_frame, text="Delay:", width=8, 
-                        font=("Arial", 8)).pack(side=tk.LEFT)
+                tk.Label(slider_frame, text="Delay:", width=8, font=("Arial", 8)).pack(side=tk.LEFT)
                 
-                self.letter_delay_var = tk.IntVar(value=100)
-                delay_slider = tk.Scale(slider_frame, from_=100, to=200, 
-                                       orient="horizontal", variable=self.letter_delay_var,
-                                       length=150, command=self.update_letter_delay,
-                                       showvalue=False)
-                delay_slider.pack(side=tk.LEFT, padx=5)
+                delay_var = tk.IntVar(value=config["delay"])
+                self.macro_delay_vars.append(delay_var)
                 
-                self.letter_delay_label = tk.Label(slider_frame, text="100ms", 
-                                                  width=5, font=("Arial", 8))
-                self.letter_delay_label.pack(side=tk.LEFT)
+                tk.Scale(slider_frame, from_=config["delay_min"], to=config["delay_max"], 
+                        orient="horizontal", variable=delay_var, length=150,
+                        command=lambda val, idx=i: self.python_macros[idx].set_delay(val),
+                        showvalue=False).pack(side=tk.LEFT, padx=5)
+                
+                label = tk.Label(slider_frame, text=f"{delay_var.get()}ms", width=5, font=("Arial", 8))
+                label.pack(side=tk.LEFT)
+                self.macro_delay_labels.append(label)
             else:
-                tk.Label(frame, text=m["desc"], fg="gray", 
-                        font=("Arial", 8)).pack(side=tk.LEFT)
+                self.macro_delay_vars.append(None)
+                self.macro_delay_labels.append(None)
+            
+            self.macro_statuses[i] = ""
+        
+        self.root.protocol("WM_DELETE_WINDOW", self.exit_app)
+        self.update_buttons()
     
     def exit_app(self):
-        if self.letter_macro and self.letter_macro_enabled:
-            self.letter_macro.stop()
+        for macro, enabled in zip(self.python_macros, self.python_macro_states):
+            if macro and enabled:
+                macro.stop()
         self.root.quit()
         self.root.destroy()
 
 if __name__ == "__main__":
-    app = MATEWmacro()
-    app.root.mainloop()
+    MATEWmacro().root.mainloop()

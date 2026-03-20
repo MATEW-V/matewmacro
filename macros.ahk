@@ -21,16 +21,16 @@ CheckStates() {
 ; Individual toggles control hotkeys
 #HotIf WinActive("ahk_exe RobloxPlayerBeta.exe") && q
 q::{
-    SendEvent "{q}"
+    SendInput "{q}"
     Sleep 60
-    SendEvent "{RButton}"
+    SendInput "{RButton}"
 }
 
 #HotIf WinActive("ahk_exe RobloxPlayerBeta.exe") && x1
-XButton1::SendEvent "{9}"
+XButton1::SendInput "{9}"
 
 #HotIf WinActive("ahk_exe RobloxPlayerBeta.exe") && x2
-XButton2::SendEvent "{8}"
+XButton2::SendInput "{8}"
 
 #HotIf
 
