@@ -87,4 +87,4 @@ def detect_blue_full(image_path, window_x=500, window_y=300, window_size=500, mi
     return groups
 
 # Usage - now shows full PNG with detection box and groups
-groups = detect_blue_full('vent2.png', window_x=355, window_y=150, window_size=350, min_group_size=500)
+groups = detect_blue_full('AUTOVENTPARRY_tests/vent1.png', window_x=155, window_y=150, window_size=350, min_group_size=500)
