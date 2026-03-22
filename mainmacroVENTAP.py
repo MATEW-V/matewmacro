@@ -100,6 +100,7 @@ class TintDetectorMacro:
         time.sleep(0.1)
         keyboard.press('f')
         keyboard.release('f')
+        print("wasd")
     
     def detection_loop(self):
         with mss.mss() as sct:
