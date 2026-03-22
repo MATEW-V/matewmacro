@@ -6,31 +6,35 @@ import cv2
 import numpy as np
 import mss
 import keyboard
+import mouse
 import threading
 import sys
 import shutil
 import tkinter.messagebox as mb
 
 # ============ CONFIGURATION ============
-# Get correct path for both script and compiled exe
-if getattr(sys, 'frozen', False):
-    INTERNAL_PATH = sys._MEIPASS
-    EXTERNAL_PATH = os.path.dirname(sys.executable)
-else:
-    INTERNAL_PATH = os.path.dirname(os.path.abspath(__file__))
-    EXTERNAL_PATH = INTERNAL_PATH
+def get_paths():
+    """Get internal and external paths for both script and compiled exe"""
+    if getattr(sys, 'frozen', False):
+        internal = sys._MEIPASS
+        external = os.path.dirname(sys.executable)
+    else:
+        internal = external = os.path.dirname(os.path.abspath(__file__))
+    return internal, external
 
-# Internal paths
+INTERNAL_PATH, EXTERNAL_PATH = get_paths()
+
+# Path definitions
 TEMPLATE_FOLDER = os.path.join(INTERNAL_PATH, "letter_templates")
 AHK_SCRIPT_SOURCE = os.path.join(INTERNAL_PATH, "macros.ahk")
-
-# External paths
 STATE_FILE = os.path.join(EXTERNAL_PATH, "state.txt")
 PID_FILE = os.path.join(EXTERNAL_PATH, "python_pid.txt")
 EXIT_SIGNAL = os.path.join(EXTERNAL_PATH, "exit_signal.txt")
 AHK_SCRIPT_DEST = os.path.join(EXTERNAL_PATH, "macros.ahk")
 
+# Screen regions
 SLOT1_LOCATION = {'left': 860, 'top': 200, 'width': 50, 'height': 100}
+TINT_SCAN_REGION = {'left': 830, 'top': 350, 'width': 250, 'height': 250}
 
 # Tint Detection Settings
 TARGET_BLUES_RGB = [
@@ -44,10 +48,9 @@ COMBAT_POINTS = [(960, 89), (964, 85), (975, 75)]
 COMBAT_COLORS_BGR = [[98, 98, 202], [92, 92, 195], [92, 92, 195]]
 COMBAT_TOLERANCE = 20
 
-TINT_PADDING = 5
-TINT_MIN_GROUP = 600
-TINT_MAX_GROUP = 2000
-TINT_SCAN_REGION = {'left': 720, 'top': 320, 'width': 470, 'height': 400}
+TINT_PADDING = 10
+TINT_MIN_GROUP = 325
+TINT_MAX_GROUP = 1800
 TINT_COOLDOWN = 1.0
 TINT_FPS = 30
 
@@ -59,82 +62,26 @@ MACROS = [
     {"name": "Ritual Cast", "hotkey": "", "desc": "automatic ritual caster", "type": "python", 
      "delay": 100, "delay_min": 100, "delay_max": 200},
     {"name": "Tint Detector", "hotkey": "", "desc": "Right click → F when tint detected", "type": "tint",
-     "min_group": 600, "padding": 5},
+     "min_group": 325, "padding": 10},
 ]
 
-# Check if templates exist
 if not os.path.exists(TEMPLATE_FOLDER):
     mb.showerror("Error", f"Templates folder not found!\n\n{TEMPLATE_FOLDER}")
     sys.exit(1)
 
-class TintDetectorMacro:
+
+class BaseMacro:
+    """Base class for all macros"""
     def __init__(self, parent, status_callback=None):
         self.parent = parent
         self.running = False
-        self.detection_count = 0
-        self.last_action = 0
-        self.min_threshold = TINT_MIN_GROUP
-        self.max_threshold = TINT_MAX_GROUP
-        self.padding = TINT_PADDING
-        self.cooldown = TINT_COOLDOWN
-        self.in_combat = False
         self.status_callback = status_callback
         self.thread = None
-        self.update_color_range()
-    
-    def update_color_range(self):
-        self.LOWER_RANGE = np.clip(np.min(TARGET_BLUES_BGR, axis=0) - self.padding, 0, 255)
-        self.UPPER_RANGE = np.clip(np.max(TARGET_BLUES_BGR, axis=0) + self.padding, 0, 255)
-    
-    def check_combat_status(self, sct):
-        for point, target in zip(COMBAT_POINTS, COMBAT_COLORS_BGR):
-            region = {'left': point[0], 'top': point[1], 'width': 1, 'height': 1}
-            pixel = np.array(sct.grab(region))[0, 0, :3]
-            if not np.all(np.abs(pixel - target) <= COMBAT_TOLERANCE):
-                return False
-        return True
-    
-    def press_sequence(self):
-        keyboard.press('right')
-        keyboard.release('right')
-        time.sleep(0.1)
-        keyboard.press('f')
-        keyboard.release('f')
-        print("wasd")
-    
-    def detection_loop(self):
-        with mss.mss() as sct:
-            while self.running:
-                if self.parent.game_active:
-                    in_combat = self.check_combat_status(sct)
-                    
-                    if in_combat != self.in_combat:
-                        self.in_combat = in_combat
-                        if self.status_callback:
-                            self.status_callback("⚔️ IN COMBAT" if in_combat else "🛡️ Out of combat")
-                    
-                    if in_combat:
-                        frame = cv2.cvtColor(np.array(sct.grab(TINT_SCAN_REGION)), cv2.COLOR_BGRA2BGR)
-                        mask = cv2.inRange(frame, self.LOWER_RANGE, self.UPPER_RANGE)
-                        
-                        largest = 0
-                        _, _, stats, _ = cv2.connectedComponentsWithStats(mask, 8, cv2.CV_32S)
-                        for i in range(1, len(stats)):
-                            largest = max(largest, stats[i, cv2.CC_STAT_AREA])
-                        
-                        if self.min_threshold <= largest <= self.max_threshold and time.time() - self.last_action >= self.cooldown:
-                            self.detection_count += 1
-                            self.press_sequence()
-                            self.last_action = time.time()
-                            if self.status_callback:
-                                self.status_callback(f"✅ #{self.detection_count}")
-                
-                time.sleep(1.0 / TINT_FPS)
     
     def start(self):
         if not self.running:
             self.running = True
-            self.thread = threading.Thread(target=self.detection_loop, daemon=True)
+            self.thread = threading.Thread(target=self.run, daemon=True)
             self.thread.start()
             return True
         return False
@@ -144,27 +91,186 @@ class TintDetectorMacro:
         if self.thread and self.thread.is_alive():
             self.thread.join(timeout=1.0)
     
+    def run(self):
+        """Override in child classes"""
+        pass
+    
+    def update_status(self, message):
+        if self.status_callback:
+            self.status_callback(message)
+
+
+class TintDetectorMacro(BaseMacro):
+    def __init__(self, parent, status_callback=None):
+        super().__init__(parent, status_callback)
+        self.detection_count = 0
+        self.last_action = 0
+        self.min_threshold = TINT_MIN_GROUP
+        self.max_threshold = TINT_MAX_GROUP
+        self.padding = TINT_PADDING
+        self.merge_distance = 5
+        self.in_combat = False
+        self.require_combat = True
+        self.cooldown = TINT_COOLDOWN
+    
+    def check_combat_status(self, sct):
+        for point, target in zip(COMBAT_POINTS, COMBAT_COLORS_BGR):
+            region = {'left': point[0], 'top': point[1], 'width': 1, 'height': 1}
+            pixel = np.array(sct.grab(region))[0, 0, :3]
+            if not np.all(np.abs(pixel - target) <= COMBAT_TOLERANCE):
+                return False
+        return True
+    
+    def find_similar_color_groups(self, frame):
+        """Group pixels by color similarity instead of exact color match"""
+        mask = np.zeros((frame.shape[0], frame.shape[1]), dtype=np.uint8)
+        
+        for target_color in TARGET_BLUES_BGR:
+            diff = frame.astype(np.float32) - target_color.astype(np.float32)
+            distance = np.sqrt(np.sum(diff ** 2, axis=2))
+            mask[distance <= self.padding] = 255
+        
+        return mask
+    
+    def merge_nearby_groups(self, stats, distance_threshold):
+        """Merge groups that are close to each other"""
+        num_groups = len(stats)
+        if num_groups <= 1:
+            return [], []
+        
+        groups = []
+        for i in range(1, num_groups):
+            groups.append({
+                'index': i,
+                'center': (stats[i, cv2.CC_STAT_LEFT] + stats[i, cv2.CC_STAT_WIDTH] // 2,
+                          stats[i, cv2.CC_STAT_TOP] + stats[i, cv2.CC_STAT_HEIGHT] // 2),
+                'area': stats[i, cv2.CC_STAT_AREA],
+                'x': stats[i, cv2.CC_STAT_LEFT],
+                'y': stats[i, cv2.CC_STAT_TOP],
+                'w': stats[i, cv2.CC_STAT_WIDTH],
+                'h': stats[i, cv2.CC_STAT_HEIGHT]
+            })
+        
+        merged_groups = []
+        used = set()
+        
+        for i, group in enumerate(groups):
+            if i in used:
+                continue
+            
+            merged = {
+                'areas': [group['area']],
+                'total_area': group['area'],
+                'min_x': group['x'],
+                'min_y': group['y'],
+                'max_x': group['x'] + group['w'],
+                'max_y': group['y'] + group['h'],
+                'groups': [group]
+            }
+            used.add(i)
+            
+            changed = True
+            while changed:
+                changed = False
+                for j, other in enumerate(groups):
+                    if j in used:
+                        continue
+                    
+                    for g in merged['groups']:
+                        dist = np.sqrt((g['center'][0] - other['center'][0])**2 + 
+                                     (g['center'][1] - other['center'][1])**2)
+                        if dist <= distance_threshold:
+                            merged['areas'].append(other['area'])
+                            merged['total_area'] += other['area']
+                            merged['min_x'] = min(merged['min_x'], other['x'])
+                            merged['min_y'] = min(merged['min_y'], other['y'])
+                            merged['max_x'] = max(merged['max_x'], other['x'] + other['w'])
+                            merged['max_y'] = max(merged['max_y'], other['y'] + other['h'])
+                            merged['groups'].append(other)
+                            used.add(j)
+                            changed = True
+                            break
+            
+            merged_groups.append(merged)
+        
+        return merged_groups, groups
+    
+    def press_sequence(self):
+        """Execute right-click then F key sequence"""
+        mouse.press("right")
+        time.sleep(0.01)
+        mouse.release("right")
+        time.sleep(0.01)
+        keyboard.press('f')
+        time.sleep(0.01)
+        keyboard.release('f')
+    
+    def run(self):
+        with mss.mss() as sct:
+            while self.running:
+                if self.parent.game_active:
+                    in_combat = self.check_combat_status(sct)
+                    
+                    if in_combat != self.in_combat:
+                        self.in_combat = in_combat
+                        combat_status = "⚔️ IN COMBAT" if in_combat else "🛡️ Out of combat"
+                        if not self.require_combat:
+                            combat_status += " (Ignored)"
+                        self.update_status(combat_status)
+                    
+                    should_process = not self.require_combat or in_combat
+                    
+                    if should_process:
+                        full_screen = np.array(sct.grab(sct.monitors[1]))
+                        full_screen_rgb = cv2.cvtColor(full_screen[:, :, :3], cv2.COLOR_BGRA2BGR)
+                        
+                        region_frame = full_screen_rgb[
+                            TINT_SCAN_REGION['top']:TINT_SCAN_REGION['top'] + TINT_SCAN_REGION['height'],
+                            TINT_SCAN_REGION['left']:TINT_SCAN_REGION['left'] + TINT_SCAN_REGION['width']
+                        ]
+                        
+                        mask = self.find_similar_color_groups(region_frame)
+                        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, 8, cv2.CV_32S)
+                        merged_groups, _ = self.merge_nearby_groups(stats, self.merge_distance)
+                        
+                        # Check for detection trigger
+                        detection_triggered = any(
+                            self.min_threshold <= g['total_area'] <= self.max_threshold 
+                            for g in merged_groups
+                        )
+                        
+                        if detection_triggered and time.time() - self.last_action >= self.cooldown:
+                            self.detection_count += 1
+                            self.press_sequence()
+                            self.last_action = time.time()
+                
+                time.sleep(1.0 / TINT_FPS)
+    
     def set_min_group(self, value):
         self.min_threshold = int(value)
     
     def set_padding(self, value):
         self.padding = int(value)
-        self.update_color_range()
+    
+    def set_merge_distance(self, value):
+        self.merge_distance = int(value)
+    
+    def set_require_combat(self, value):
+        self.require_combat = value
+        return self.require_combat
 
-class LetterMacro:
+
+class LetterMacro(BaseMacro):
     def __init__(self, parent, status_callback=None):
-        self.enabled = False
+        super().__init__(parent, status_callback)
         self.region = SLOT1_LOCATION
         self.templates = []
-        self.status_callback = status_callback
-        self.parent = parent
-        self.thread = None
         self.DETECTION_THRESHOLD = 0.85
         self.MIN_BRIGHTNESS = 10
         self.FAST_POLL = 0.05
         self.KEY_DELAY = 0.10
         self.load_templates()
-        
+    
     def load_templates(self):
         self.templates = []
         for f in os.listdir(TEMPLATE_FOLDER):
@@ -174,10 +280,10 @@ class LetterMacro:
             img = cv2.imread(os.path.join(TEMPLATE_FOLDER, f), cv2.IMREAD_GRAYSCALE)
             if img is not None:
                 self.templates.append((letter, img))
-        
+    
     def detect_in_region(self, img):
         try:
-            gray = cv2.cvtColor(img[:, :, :3], cv2.COLOR_BGR2GRAY) if img.shape[2] == 4 else cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            gray = cv2.cvtColor(img[:, :, :3], cv2.COLOR_BGR2GRAY)
             if np.mean(gray) < self.MIN_BRIGHTNESS:
                 return None
                 
@@ -193,11 +299,11 @@ class LetterMacro:
             return best_letter if best_score >= self.DETECTION_THRESHOLD else None
         except:
             return None
-        
-    def macro_loop(self):
+    
+    def run(self):
         type_count = 0
         with mss.mss() as sct:
-            while self.enabled:
+            while self.running:
                 if self.parent.game_active:
                     img = np.array(sct.grab(self.region))
                     letter = self.detect_in_region(img)
@@ -206,60 +312,69 @@ class LetterMacro:
                         type_count += 1
                         time.sleep(self.KEY_DELAY)
                 time.sleep(self.FAST_POLL)
-        
-    def start(self):
-        if not self.enabled:
-            self.enabled = True
-            self.thread = threading.Thread(target=self.macro_loop, daemon=True)
-            self.thread.start()
-            return True
-        return False
-        
-    def stop(self):
-        self.enabled = False
-        if self.thread and self.thread.is_alive():
-            self.thread.join(timeout=1.0)
-        
+    
     def set_delay(self, ms):
         self.KEY_DELAY = ms / 1000
 
+
 class MATEWmacro:
     def __init__(self):
-        self.state_file = STATE_FILE
         self.game_active = False
         self.macro_configs = MACROS
-        self.pid_file = PID_FILE
+        self.python_macros = [None] * len(self.macro_configs)
+        self.python_macro_states = [False] * len(self.macro_configs)
+        self.macro_statuses = {}
         
-        if not os.path.exists(self.state_file):
-            with open(self.state_file, 'w') as f:
+        # Initialize files
+        self.init_files()
+        
+        # Start AHK scripts if available
+        self.start_ahk_scripts()
+        
+        # Initialize macros
+        self.init_macros()
+        
+        # Setup GUI
+        self.setup_gui()
+        
+        # Start background threads
+        threading.Thread(target=self.monitor_roblox, daemon=True).start()
+        threading.Thread(target=self.update_combat_indicators, daemon=True).start()
+    
+    def init_files(self):
+        """Initialize state and PID files"""
+        if not os.path.exists(STATE_FILE):
+            with open(STATE_FILE, 'w') as f:
                 f.write(",".join(["0"] * len(self.macro_configs)))
         
-        with open(self.pid_file, 'w') as f:
+        with open(PID_FILE, 'w') as f:
             f.write(str(os.getpid()))
-        
+    
+    def start_ahk_scripts(self):
+        """Start AHK scripts if available"""
         if os.path.exists(AHK_SCRIPT_SOURCE):
             if not os.path.exists(AHK_SCRIPT_DEST):
                 shutil.copy2(AHK_SCRIPT_SOURCE, AHK_SCRIPT_DEST)
             if os.path.exists(AHK_SCRIPT_DEST):
                 subprocess.Popen([AHK_SCRIPT_DEST], shell=True)
-        
-        self.python_macros = [None] * len(self.macro_configs)
-        self.python_macro_states = [False] * len(self.macro_configs)
-        
+    
+    def init_macros(self):
+        """Initialize Python-based macros"""
         for i, config in enumerate(self.macro_configs):
-            if config.get("type") == "python":
-                self.python_macros[i] = LetterMacro(self, lambda msg, idx=i: self.update_macro_status(idx, msg))
-            elif config.get("type") == "tint":
-                self.python_macros[i] = TintDetectorMacro(self, lambda msg, idx=i: self.update_macro_status(idx, msg))
-        
-        self.setup_gui()
-        threading.Thread(target=self.monitor_roblox, daemon=True).start()
+            macro_type = config.get("type")
+            if macro_type == "python":
+                self.python_macros[i] = LetterMacro(self, 
+                    lambda msg, idx=i: self.update_macro_status(idx, msg))
+            elif macro_type == "tint":
+                self.python_macros[i] = TintDetectorMacro(self, 
+                    lambda msg, idx=i: self.update_macro_status(idx, msg))
     
     def update_macro_status(self, index, message):
         self.macro_statuses[index] = message
         self.root.after(0, self.update_buttons)
     
     def monitor_roblox(self):
+        """Monitor if Roblox is active"""
         try:
             import pywinctl as pwc
             while True:
@@ -270,17 +385,20 @@ class MATEWmacro:
             self.game_active = True
     
     def read_states(self):
+        """Read macro states from file"""
         try:
-            with open(self.state_file, 'r') as f:
+            with open(STATE_FILE, 'r') as f:
                 return [x == "1" for x in f.read().strip().split(",")]
         except:
             return [False] * len(self.macro_configs)
     
     def write_states(self, states):
-        with open(self.state_file, 'w') as f:
+        """Write macro states to file"""
+        with open(STATE_FILE, 'w') as f:
             f.write(",".join(["1" if s else "0" for s in states]))
     
     def toggle_macro(self, index):
+        """Toggle macro on/off"""
         states = self.read_states()
         states[index] = not states[index]
         self.write_states(states)
@@ -296,104 +414,196 @@ class MATEWmacro:
         
         self.update_buttons()
     
+    def toggle_combat_requirement(self, index):
+        """Toggle combat requirement for tint detector"""
+        macro = self.python_macros[index]
+        if macro and hasattr(macro, 'set_require_combat'):
+            new_state = not macro.require_combat
+            macro.set_require_combat(new_state)
+            
+            if index in self.combat_toggle_buttons:
+                self.combat_toggle_buttons[index].config(
+                    text="✅ Combat Only" if new_state else "🌍 Always On",
+                    bg="green" if new_state else "orange"
+                )
+            self.update_macro_status(index, f"Mode: {'Combat Only' if new_state else 'Always On'}")
+    
     def update_buttons(self):
+        """Update GUI button states"""
         states = self.read_states()
         for i, btn in enumerate(self.buttons):
             config = self.macro_configs[i]
             is_on = states[i]
-            text = f"{config['name']}: {self.macro_statuses[i][-25:]}" if is_on and i in self.macro_statuses else f"{config['name']}: {'ON' if is_on else 'OFF'}"
+            status = self.macro_statuses.get(i, "")
+            text = f"{config['name']}: {status[-25:]}" if is_on and status else f"{config['name']}: {'ON' if is_on else 'OFF'}"
             btn.config(text=text, bg="green" if is_on else "lightgray", fg="white" if is_on else "black")
         
-        self.status_label.config(text=f"Roblox: {'ACTIVE' if self.game_active else 'INACTIVE'}", fg="green" if self.game_active else "red")
+        self.status_label.config(
+            text=f"Roblox: {'ACTIVE' if self.game_active else 'INACTIVE'}",
+            fg="green" if self.game_active else "red"
+        )
         self.root.after(500, self.update_buttons)
     
+    def update_combat_indicators(self):
+        """Update combat indicator UI elements"""
+        while True:
+            for i, config in enumerate(self.macro_configs):
+                if config.get("type") == "tint" and i in self.combat_indicators:
+                    macro = self.python_macros[i]
+                    if macro:
+                        in_combat = getattr(macro, 'in_combat', False)
+                        require_combat = getattr(macro, 'require_combat', True)
+                        
+                        if require_combat:
+                            text, color = ("[IN COMBAT]" if in_combat else "[OUT]", 
+                                         "red" if in_combat else "gray")
+                        else:
+                            text, color = ("[ALWAYS ON]", "orange")
+                        
+                        self.combat_indicators[i].config(text=text, fg=color)
+            time.sleep(0.2)
+    
+    def create_slider(self, parent, label, from_, to, variable, command, showvalue=True, length=100):
+        """Helper to create a slider with label"""
+        frame = tk.Frame(parent)
+        frame.pack(fill=tk.X, pady=(0, 5), padx=(40, 0))
+        
+        tk.Label(frame, text=label, font=("Arial", 7)).pack(side=tk.LEFT, padx=(5,0))
+        tk.Scale(frame, from_=from_, to=to, orient="horizontal", variable=variable, 
+                length=length, command=command, showvalue=False).pack(side=tk.LEFT, padx=2)
+        
+        if showvalue:
+            tk.Label(frame, textvariable=variable, width=4, font=("Arial", 7)).pack(side=tk.LEFT)
+        
+        return frame
+    
     def setup_gui(self):
+        """Setup the main GUI window"""
         self.root = tk.Tk()
         self.root.attributes('-topmost', True)
         self.root.title("MATEW MACRO")
-        self.root.geometry(f"580x{100 + len(self.macro_configs) * 45}")
+        self.root.geometry(f"650x{100 + len(self.macro_configs) * 45}")
         
         main = tk.Frame(self.root, padx=20, pady=20)
         main.pack()
         
+        # Status label
         self.status_label = tk.Label(main, text="Roblox: INACTIVE", font=("Arial", 10, "bold"), fg="red")
         self.status_label.pack(pady=(0, 10))
         
+        # Buttons and controls
         self.buttons = []
-        self.macro_statuses = {}
         self.combat_indicators = {}
+        self.combat_toggle_buttons = {}
         
         for i, config in enumerate(self.macro_configs):
             frame = tk.Frame(main)
             frame.pack(fill=tk.X, pady=3)
             
+            # Hotkey label
             hotkey = f"[{config['hotkey']}]" if config['hotkey'] else "    "
             tk.Label(frame, text=hotkey, width=8, fg="blue", font=("Arial", 9, "bold")).pack(side=tk.LEFT)
             
-            btn = tk.Button(frame, text=f"{config['name']}: OFF", command=lambda idx=i: self.toggle_macro(idx), width=20, bg="lightgray")
+            # Toggle button
+            btn = tk.Button(frame, text=f"{config['name']}: OFF", 
+                          command=lambda idx=i: self.toggle_macro(idx), 
+                          width=20, bg="lightgray")
             btn.pack(side=tk.LEFT, padx=5)
             self.buttons.append(btn)
             
+            # Description
             tk.Label(frame, text=config["desc"], fg="gray", font=("Arial", 8)).pack(side=tk.LEFT, padx=5)
             
-            if config.get("type") == "tint":
-                slider_frame = tk.Frame(main)
-                slider_frame.pack(fill=tk.X, pady=(0, 5), padx=(40, 0))
-                
-                combat_indicator = tk.Label(slider_frame, text="[OUT]", fg="gray", font=("Arial", 8, "bold"))
-                combat_indicator.pack(side=tk.LEFT, padx=5)
-                self.combat_indicators[i] = combat_indicator
-                
-                min_var = tk.IntVar(value=config["min_group"])
-                tk.Label(slider_frame, text="Min:", font=("Arial", 7)).pack(side=tk.LEFT, padx=(5,0))
-                tk.Scale(slider_frame, from_=200, to=2500, orient="horizontal", variable=min_var, length=100,
-                        command=lambda v, idx=i: self.python_macros[idx].set_min_group(v), showvalue=False).pack(side=tk.LEFT, padx=2)
-                tk.Label(slider_frame, textvariable=min_var, width=4, font=("Arial", 7)).pack(side=tk.LEFT)
-                
-                tk.Label(slider_frame, text=f"Max:{TINT_MAX_GROUP}px", font=("Arial", 7), fg="blue").pack(side=tk.LEFT, padx=5)
-                
-                pad_var = tk.IntVar(value=config["padding"])
-                tk.Label(slider_frame, text="Pad:", font=("Arial", 7)).pack(side=tk.LEFT, padx=(5,0))
-                tk.Scale(slider_frame, from_=0, to=15, orient="horizontal", variable=pad_var, length=60,
-                        command=lambda v, idx=i: self.python_macros[idx].set_padding(v), showvalue=False).pack(side=tk.LEFT, padx=2)
-                tk.Label(slider_frame, textvariable=pad_var, width=2, font=("Arial", 7)).pack(side=tk.LEFT)
-            
-            elif config.get("type") == "python" and "delay" in config:
-                slider_frame = tk.Frame(main)
-                slider_frame.pack(fill=tk.X, pady=(0, 10), padx=(40, 0))
-                
-                tk.Label(slider_frame, text="Delay:", font=("Arial", 8)).pack(side=tk.LEFT)
-                delay_var = tk.IntVar(value=config["delay"])
-                delay_label = tk.Label(slider_frame, text=f"{delay_var.get()}ms", width=5, font=("Arial", 8))
-                tk.Scale(slider_frame, from_=config["delay_min"], to=config["delay_max"], orient="horizontal", 
-                        variable=delay_var, length=150, command=lambda v, idx=i: self.python_macros[idx].set_delay(int(v)), showvalue=False).pack(side=tk.LEFT, padx=5)
-                delay_label.pack(side=tk.LEFT)
+            # Additional controls for specific macro types
+            self.add_macro_controls(i, config)
             
             self.macro_statuses[i] = ""
         
         self.root.protocol("WM_DELETE_WINDOW", self.exit_app)
         self.update_buttons()
+    
+    def add_macro_controls(self, index, config):
+        """Add macro-specific controls"""
+        macro_type = config.get("type")
         
-        def update_combat_indicators():
-            while True:
-                for i, config in enumerate(self.macro_configs):
-                    if config.get("type") == "tint" and i in self.combat_indicators and self.python_macros[i]:
-                        in_combat = getattr(self.python_macros[i], 'in_combat', False)
-                        self.combat_indicators[i].config(text="[IN COMBAT]" if in_combat else "[OUT]", fg="red" if in_combat else "gray")
-                time.sleep(0.2)
-        threading.Thread(target=update_combat_indicators, daemon=True).start()
+        if macro_type == "tint":
+            # Create a single row frame for all tint controls
+            controls_frame = tk.Frame(self.root)
+            controls_frame.pack(fill=tk.X, pady=(0, 5), padx=(40, 0))
+            
+            # Combat indicator and toggle in one group
+            combat_frame = tk.Frame(controls_frame)
+            combat_frame.pack(side=tk.LEFT, padx=(0, 10))
+            
+            combat_indicator = tk.Label(combat_frame, text="[OUT]", fg="gray", font=("Arial", 8, "bold"))
+            combat_indicator.pack(side=tk.LEFT, padx=2)
+            self.combat_indicators[index] = combat_indicator
+            
+            combat_toggle = tk.Button(combat_frame, text="✅ Combat Only", 
+                                    command=lambda idx=index: self.toggle_combat_requirement(idx),
+                                    bg="green", fg="white", font=("Arial", 7), 
+                                    width=12, height=1)
+            combat_toggle.pack(side=tk.LEFT, padx=2)
+            self.combat_toggle_buttons[index] = combat_toggle
+            
+            # Min slider group
+            min_frame = tk.Frame(controls_frame)
+            min_frame.pack(side=tk.LEFT, padx=(0, 10))
+            tk.Label(min_frame, text="Min:", font=("Arial", 7)).pack(side=tk.LEFT)
+            min_var = tk.IntVar(value=config["min_group"])
+            tk.Scale(min_frame, from_=200, to=2500, orient="horizontal", variable=min_var, 
+                    length=80, command=lambda v, idx=index: self.python_macros[idx].set_min_group(v), 
+                    showvalue=False).pack(side=tk.LEFT, padx=2)
+            tk.Label(min_frame, textvariable=min_var, width=4, font=("Arial", 7)).pack(side=tk.LEFT)
+            
+            # Max label (static)
+            max_frame = tk.Frame(controls_frame)
+            max_frame.pack(side=tk.LEFT, padx=(0, 10))
+            tk.Label(max_frame, text=f"Max:{TINT_MAX_GROUP}", font=("Arial", 7), fg="blue").pack(side=tk.LEFT)
+            
+            # Pad slider group
+            pad_frame = tk.Frame(controls_frame)
+            pad_frame.pack(side=tk.LEFT)
+            tk.Label(pad_frame, text="Pad:", font=("Arial", 7)).pack(side=tk.LEFT)
+            pad_var = tk.IntVar(value=config["padding"])
+            tk.Scale(pad_frame, from_=0, to=15, orient="horizontal", variable=pad_var, 
+                    length=60, command=lambda v, idx=index: self.python_macros[idx].set_padding(v), 
+                    showvalue=False).pack(side=tk.LEFT, padx=2)
+            tk.Label(pad_frame, textvariable=pad_var, width=2, font=("Arial", 7)).pack(side=tk.LEFT)
+        
+        elif macro_type == "python" and "delay" in config:
+            # Delay slider for ritual cast
+            controls_frame = tk.Frame(self.root)
+            controls_frame.pack(fill=tk.X, pady=(0, 5), padx=(40, 0))
+            
+            tk.Label(controls_frame, text="Delay:", font=("Arial", 7)).pack(side=tk.LEFT)
+            delay_var = tk.IntVar(value=config["delay"])
+            delay_label = tk.Label(controls_frame, text=f"{delay_var.get()}ms", width=5, font=("Arial", 8))
+            delay_label.pack(side=tk.RIGHT)
+            
+            tk.Scale(controls_frame, from_=config["delay_min"], to=config["delay_max"], 
+                    orient="horizontal", variable=delay_var, length=150,
+                    command=lambda v, idx=index, label=delay_label: [self.python_macros[idx].set_delay(int(v)), 
+                                                                    label.config(text=f"{int(v)}ms")], 
+                    showvalue=False).pack(side=tk.RIGHT, padx=5)
     
     def exit_app(self):
+        """Clean up and exit"""
         with open(EXIT_SIGNAL, 'w') as f:
             f.write("exit")
-        if os.path.exists(self.pid_file):
-            os.remove(self.pid_file)
+        
+        if os.path.exists(PID_FILE):
+            os.remove(PID_FILE)
+        
         time.sleep(0.3)
+        
         for macro, enabled in zip(self.python_macros, self.python_macro_states):
             if macro and enabled:
                 macro.stop()
+        
         self.root.quit()
         self.root.destroy()
+
 
 if __name__ == "__main__":
     MATEWmacro().root.mainloop()
