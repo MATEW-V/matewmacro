@@ -315,10 +315,6 @@ class MATEWmacro:
         
         # Setup GUI
         self.setup_gui()
-        
-        # Start background threads
-        threading.Thread(target=self.monitor_roblox, daemon=True).start()
-        threading.Thread(target=self.update_combat_indicators, daemon=True).start()
     
     def init_files(self):
         """Initialize state and PID files"""
@@ -471,8 +467,8 @@ class MATEWmacro:
             
             # Toggle button
             btn = tk.Button(frame, text=f"{config['name']}: OFF", 
-                          command=lambda idx=i: self.toggle_macro(idx), 
-                          width=20, bg="lightgray")
+                        command=lambda idx=i: self.toggle_macro(idx), 
+                        width=20, bg="lightgray")
             btn.pack(side=tk.LEFT, padx=5)
             self.buttons.append(btn)
             
@@ -485,18 +481,56 @@ class MATEWmacro:
             self.macro_statuses[i] = ""
         
         self.root.protocol("WM_DELETE_WINDOW", self.exit_app)
+        
+        # ✅ DON'T call update_buttons() here yet - wait for after_idle
+        # self.update_buttons()  # <-- REMOVE THIS LINE
+        
+        # ✅ Schedule the first update AFTER the GUI is fully rendered
+        self.root.after_idle(self.first_update)
+        
+        # ✅ Start threads AFTER everything is set up
+        threading.Thread(target=self.monitor_roblox, daemon=True).start()
+        threading.Thread(target=self.update_combat_indicators, daemon=True).start()
+
+    def first_update(self):
+        """First safe update after GUI is fully ready"""
         self.update_buttons()
+
+    def update_buttons(self):
+        """Update GUI button states - with safety checks"""
+        # ✅ Critical safety check
+        if not hasattr(self, 'buttons') or not self.buttons:
+            return
+        
+        states = self.read_states()
+        
+        # ✅ Loop with bounds checking
+        for i in range(len(self.buttons)):
+            if i < len(self.macro_configs) and i < len(states):
+                config = self.macro_configs[i]
+                is_on = states[i] if i < len(states) else False
+                status = self.macro_statuses.get(i, "")
+                text = f"{config['name']}: {status[-25:]}" if is_on and status else f"{config['name']}: {'ON' if is_on else 'OFF'}"
+                self.buttons[i].config(text=text, bg="green" if is_on else "lightgray", fg="white" if is_on else "black")
+        
+        # Update status label
+        if hasattr(self, 'status_label'):
+            self.status_label.config(
+                text=f"Roblox: {'ACTIVE' if self.game_active else 'INACTIVE'}",
+                fg="green" if self.game_active else "red"
+            )
+        
+        # Schedule next update
+        if hasattr(self, 'root') and self.root:
+            self.root.after(500, self.update_buttons)
     
     def add_macro_controls(self, index, config):
-        """Add macro-specific controls"""
         macro_type = config.get("type")
-        
+    
         if macro_type == "tint":
-            # Create a single row frame for tint controls
             controls_frame = tk.Frame(self.root)
             controls_frame.pack(fill=tk.X, pady=(0, 5), padx=(40, 0))
             
-            # Combat indicator and toggle only
             combat_frame = tk.Frame(controls_frame)
             combat_frame.pack(side=tk.LEFT)
             
@@ -515,16 +549,12 @@ class MATEWmacro:
         """Clean up and exit"""
         with open(EXIT_SIGNAL, 'w') as f:
             f.write("exit")
-        
         if os.path.exists(PID_FILE):
             os.remove(PID_FILE)
-        
         time.sleep(0.3)
-        
         for macro, enabled in zip(self.python_macros, self.python_macro_states):
             if macro and enabled:
                 macro.stop()
-        
         self.root.quit()
         self.root.destroy()
 
