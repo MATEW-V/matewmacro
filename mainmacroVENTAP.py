@@ -49,20 +49,19 @@ COMBAT_COLORS_BGR = [[98, 98, 202], [92, 92, 195], [92, 92, 195]]
 COMBAT_TOLERANCE = 20
 
 TINT_PADDING = 10
-TINT_MIN_GROUP = 325
+TINT_MIN_GROUP = 300
 TINT_MAX_GROUP = 1800
 TINT_COOLDOWN = 1.0
 TINT_FPS = 30
+MERGE_DISTANCE = 5  # Fixed merge distance
 
 MACROS = [
     {"name": "Dodge Cancel", "hotkey": "Q", "desc": "Q → delay → right click", "type": "ahk"},
     {"name": "b mbutton -> 9", "hotkey": "XButton1", "desc": "Mouse back → 9", "type": "ahk"},
     {"name": "f mbutton -> 8", "hotkey": "XButton2", "desc": "Mouse forward → 8", "type": "ahk"},
     {"name": "Roll Parry", "hotkey": "CTRL+F", "desc": "hold ctrl and m1 after for insta uppercut", "type": "ahk"},
-    {"name": "Ritual Cast", "hotkey": "", "desc": "automatic ritual caster", "type": "python", 
-     "delay": 100, "delay_min": 100, "delay_max": 200},
-    {"name": "Tint Detector", "hotkey": "", "desc": "Right click → F when tint detected", "type": "tint",
-     "min_group": 325, "padding": 10},
+    {"name": "Ritual Cast", "hotkey": "", "desc": "Automatic Ritual Caster", "type": "python"},
+    {"name": "Vent Predict", "hotkey": "", "desc": "Computer Vision Vent Reader", "type": "tint"},
 ]
 
 if not os.path.exists(TEMPLATE_FOLDER):
@@ -103,12 +102,7 @@ class BaseMacro:
 class TintDetectorMacro(BaseMacro):
     def __init__(self, parent, status_callback=None):
         super().__init__(parent, status_callback)
-        self.detection_count = 0
         self.last_action = 0
-        self.min_threshold = TINT_MIN_GROUP
-        self.max_threshold = TINT_MAX_GROUP
-        self.padding = TINT_PADDING
-        self.merge_distance = 5
         self.in_combat = False
         self.require_combat = True
         self.cooldown = TINT_COOLDOWN
@@ -128,11 +122,11 @@ class TintDetectorMacro(BaseMacro):
         for target_color in TARGET_BLUES_BGR:
             diff = frame.astype(np.float32) - target_color.astype(np.float32)
             distance = np.sqrt(np.sum(diff ** 2, axis=2))
-            mask[distance <= self.padding] = 255
+            mask[distance <= TINT_PADDING] = 255
         
         return mask
     
-    def merge_nearby_groups(self, stats, distance_threshold):
+    def merge_nearby_groups(self, stats):
         """Merge groups that are close to each other"""
         num_groups = len(stats)
         if num_groups <= 1:
@@ -179,7 +173,7 @@ class TintDetectorMacro(BaseMacro):
                     for g in merged['groups']:
                         dist = np.sqrt((g['center'][0] - other['center'][0])**2 + 
                                      (g['center'][1] - other['center'][1])**2)
-                        if dist <= distance_threshold:
+                        if dist <= MERGE_DISTANCE:
                             merged['areas'].append(other['area'])
                             merged['total_area'] += other['area']
                             merged['min_x'] = min(merged['min_x'], other['x'])
@@ -231,29 +225,19 @@ class TintDetectorMacro(BaseMacro):
                         
                         mask = self.find_similar_color_groups(region_frame)
                         num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, 8, cv2.CV_32S)
-                        merged_groups, _ = self.merge_nearby_groups(stats, self.merge_distance)
+                        merged_groups, _ = self.merge_nearby_groups(stats)
                         
                         # Check for detection trigger
                         detection_triggered = any(
-                            self.min_threshold <= g['total_area'] <= self.max_threshold 
+                            TINT_MIN_GROUP <= g['total_area'] <= TINT_MAX_GROUP 
                             for g in merged_groups
                         )
                         
                         if detection_triggered and time.time() - self.last_action >= self.cooldown:
-                            self.detection_count += 1
                             self.press_sequence()
                             self.last_action = time.time()
                 
                 time.sleep(1.0 / TINT_FPS)
-    
-    def set_min_group(self, value):
-        self.min_threshold = int(value)
-    
-    def set_padding(self, value):
-        self.padding = int(value)
-    
-    def set_merge_distance(self, value):
-        self.merge_distance = int(value)
     
     def set_require_combat(self, value):
         self.require_combat = value
@@ -301,7 +285,6 @@ class LetterMacro(BaseMacro):
             return None
     
     def run(self):
-        type_count = 0
         with mss.mss() as sct:
             while self.running:
                 if self.parent.game_active:
@@ -309,12 +292,8 @@ class LetterMacro(BaseMacro):
                     letter = self.detect_in_region(img)
                     if letter:
                         keyboard.press_and_release(letter.lower())
-                        type_count += 1
                         time.sleep(self.KEY_DELAY)
                 time.sleep(self.FAST_POLL)
-    
-    def set_delay(self, ms):
-        self.KEY_DELAY = ms / 1000
 
 
 class MATEWmacro:
@@ -463,20 +442,6 @@ class MATEWmacro:
                         self.combat_indicators[i].config(text=text, fg=color)
             time.sleep(0.2)
     
-    def create_slider(self, parent, label, from_, to, variable, command, showvalue=True, length=100):
-        """Helper to create a slider with label"""
-        frame = tk.Frame(parent)
-        frame.pack(fill=tk.X, pady=(0, 5), padx=(40, 0))
-        
-        tk.Label(frame, text=label, font=("Arial", 7)).pack(side=tk.LEFT, padx=(5,0))
-        tk.Scale(frame, from_=from_, to=to, orient="horizontal", variable=variable, 
-                length=length, command=command, showvalue=False).pack(side=tk.LEFT, padx=2)
-        
-        if showvalue:
-            tk.Label(frame, textvariable=variable, width=4, font=("Arial", 7)).pack(side=tk.LEFT)
-        
-        return frame
-    
     def setup_gui(self):
         """Setup the main GUI window"""
         self.root = tk.Tk()
@@ -527,13 +492,13 @@ class MATEWmacro:
         macro_type = config.get("type")
         
         if macro_type == "tint":
-            # Create a single row frame for all tint controls
+            # Create a single row frame for tint controls
             controls_frame = tk.Frame(self.root)
             controls_frame.pack(fill=tk.X, pady=(0, 5), padx=(40, 0))
             
-            # Combat indicator and toggle in one group
+            # Combat indicator and toggle only
             combat_frame = tk.Frame(controls_frame)
-            combat_frame.pack(side=tk.LEFT, padx=(0, 10))
+            combat_frame.pack(side=tk.LEFT)
             
             combat_indicator = tk.Label(combat_frame, text="[OUT]", fg="gray", font=("Arial", 8, "bold"))
             combat_indicator.pack(side=tk.LEFT, padx=2)
@@ -545,47 +510,6 @@ class MATEWmacro:
                                     width=12, height=1)
             combat_toggle.pack(side=tk.LEFT, padx=2)
             self.combat_toggle_buttons[index] = combat_toggle
-            
-            # Min slider group
-            min_frame = tk.Frame(controls_frame)
-            min_frame.pack(side=tk.LEFT, padx=(0, 10))
-            tk.Label(min_frame, text="Min:", font=("Arial", 7)).pack(side=tk.LEFT)
-            min_var = tk.IntVar(value=config["min_group"])
-            tk.Scale(min_frame, from_=200, to=2500, orient="horizontal", variable=min_var, 
-                    length=80, command=lambda v, idx=index: self.python_macros[idx].set_min_group(v), 
-                    showvalue=False).pack(side=tk.LEFT, padx=2)
-            tk.Label(min_frame, textvariable=min_var, width=4, font=("Arial", 7)).pack(side=tk.LEFT)
-            
-            # Max label (static)
-            max_frame = tk.Frame(controls_frame)
-            max_frame.pack(side=tk.LEFT, padx=(0, 10))
-            tk.Label(max_frame, text=f"Max:{TINT_MAX_GROUP}", font=("Arial", 7), fg="blue").pack(side=tk.LEFT)
-            
-            # Pad slider group
-            pad_frame = tk.Frame(controls_frame)
-            pad_frame.pack(side=tk.LEFT)
-            tk.Label(pad_frame, text="Pad:", font=("Arial", 7)).pack(side=tk.LEFT)
-            pad_var = tk.IntVar(value=config["padding"])
-            tk.Scale(pad_frame, from_=0, to=15, orient="horizontal", variable=pad_var, 
-                    length=60, command=lambda v, idx=index: self.python_macros[idx].set_padding(v), 
-                    showvalue=False).pack(side=tk.LEFT, padx=2)
-            tk.Label(pad_frame, textvariable=pad_var, width=2, font=("Arial", 7)).pack(side=tk.LEFT)
-        
-        elif macro_type == "python" and "delay" in config:
-            # Delay slider for ritual cast
-            controls_frame = tk.Frame(self.root)
-            controls_frame.pack(fill=tk.X, pady=(0, 5), padx=(40, 0))
-            
-            tk.Label(controls_frame, text="Delay:", font=("Arial", 7)).pack(side=tk.LEFT)
-            delay_var = tk.IntVar(value=config["delay"])
-            delay_label = tk.Label(controls_frame, text=f"{delay_var.get()}ms", width=5, font=("Arial", 8))
-            delay_label.pack(side=tk.RIGHT)
-            
-            tk.Scale(controls_frame, from_=config["delay_min"], to=config["delay_max"], 
-                    orient="horizontal", variable=delay_var, length=150,
-                    command=lambda v, idx=index, label=delay_label: [self.python_macros[idx].set_delay(int(v)), 
-                                                                    label.config(text=f"{int(v)}ms")], 
-                    showvalue=False).pack(side=tk.RIGHT, padx=5)
     
     def exit_app(self):
         """Clean up and exit"""
